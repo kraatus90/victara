@@ -21,6 +21,7 @@
 #include <linux/leds.h>
 #include <linux/qpnp/pwm.h>
 #include <linux/err.h>
+#include <linux/display_state.h>
 #include <linux/dropbox.h>
 #include <linux/uaccess.h>
 #include <linux/msm_mdp.h>
@@ -97,6 +98,13 @@ static void mdss_dsi_panel_bl_on_defer_wait(struct mdss_dsi_ctrl_pdata *ctrl)
 		wait_for_completion_timeout(&bl_on_delay_completion,
 				msecs_to_jiffies(pinfo->bl_on_defer_delay) + 1);
 	}
+}
+
+bool display_on = true;
+
+bool is_display_on()
+{
+	return display_on;
 }
 
 void mdss_dsi_panel_pwm_cfg(struct mdss_dsi_ctrl_pdata *ctrl)
@@ -784,6 +792,8 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 		return -EINVAL;
 	}
 
+	display_on = true;
+
 	ctrl = container_of(pdata, struct mdss_dsi_ctrl_pdata,
 				panel_data);
 	mipi  = &pdata->panel_info.mipi;
@@ -936,6 +946,9 @@ disable_regs:
 		pdata->panel_info.cabc_mode = CABC_OFF_MODE;
 
 	pr_info("%s-:\n", __func__);
+
+
+	display_on = false;
 
 	return 0;
 }
