@@ -51,7 +51,6 @@ struct cpufreq_interactive_cpuinfo {
 	spinlock_t target_freq_lock; /*protects target freq */
 	unsigned int target_freq;
 	unsigned int floor_freq;
-	unsigned int max_freq;
 	unsigned int min_freq;
 	u64 floor_validate_time;
 	u64 hispeed_validate_time; /* cluster hispeed_validate_time */
@@ -112,8 +111,6 @@ static int boost_val;
 static int boostpulse_duration_val = DEFAULT_MIN_SAMPLE_TIME;
 /* End time of boost pulse in ktime converted to usecs */
 static u64 boostpulse_endtime;
-
-static bool boosted;
 
 /*
  * Max additional time to wait in idle, beyond timer_rate, at speeds above
@@ -381,13 +378,11 @@ static void cpufreq_interactive_timer(unsigned long data)
 	unsigned int index;
 	unsigned long flags;
 	unsigned int this_hispeed_freq;
+	bool boosted;
 
 	if (!down_read_trylock(&pcpu->enable_sem))
 		return;
 	if (!pcpu->governor_enabled)
-		goto exit;
-
-	if (cpu_is_offline(data))
 		goto exit;
 
 	spin_lock_irqsave(&pcpu->load_lock, flags);
@@ -613,8 +608,6 @@ static void cpufreq_interactive_boost(void)
 	int anyboost = 0;
 	unsigned long flags[2];
 	struct cpufreq_interactive_cpuinfo *pcpu;
-
-	boosted = true;
 
 	spin_lock_irqsave(&speedchange_cpumask_lock, flags[0]);
 
@@ -1013,8 +1006,7 @@ static ssize_t store_boost(struct kobject *kobj, struct attribute *attr,
 
 	if (boost_val) {
 		trace_cpufreq_interactive_boost("on");
-		if (!boosted)
-			cpufreq_interactive_boost();
+		cpufreq_interactive_boost();
 	} else {
 		boostpulse_endtime = ktime_to_us(ktime_get());
 		trace_cpufreq_interactive_unboost("off");
@@ -1037,8 +1029,7 @@ static ssize_t store_boostpulse(struct kobject *kobj, struct attribute *attr,
 
 	boostpulse_endtime = ktime_to_us(ktime_get()) + boostpulse_duration_val;
 	trace_cpufreq_interactive_boost("pulse");
-	if (!boosted)
-		cpufreq_interactive_boost();
+	cpufreq_interactive_boost();
 	return count;
 }
 
@@ -1159,7 +1150,6 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 			pcpu->hispeed_validate_time =
 				pcpu->floor_validate_time;
 			pcpu->local_hvtime = pcpu->floor_validate_time;
-			pcpu->max_freq = policy->max;
 			pcpu->min_freq = policy->min;
 			down_write(&pcpu->enable_sem);
 			del_timer_sync(&pcpu->cpu_timer);
@@ -1246,19 +1236,7 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 
 			up_read(&pcpu->enable_sem);
 
-			/* Reschedule timer.
-			 * Delete the timers, else the timer callback may
-			 * return without re-arm the timer when failed
-			 * acquire the semaphore. This race may cause timer
-			 * stopped unexpectedly.
-			 */
-			if (policy->max > pcpu->max_freq) {
-				down_write(&pcpu->enable_sem);
-				del_timer_sync(&pcpu->cpu_timer);
-				del_timer_sync(&pcpu->cpu_slack_timer);
-				cpufreq_interactive_timer_resched(j, false);
-				up_write(&pcpu->enable_sem);
-			} else if (anyboost) {
+			if (anyboost) {
 				u64 now = ktime_to_us(ktime_get());
 
 				cpumask_set_cpu(j, &speedchange_cpumask);
@@ -1266,8 +1244,6 @@ static int cpufreq_governor_interactive(struct cpufreq_policy *policy,
 				pcpu->floor_freq = policy->min;
 				pcpu->floor_validate_time = now;
 			}
-
-			pcpu->max_freq = policy->max;
 		}
 		if (anyboost)
 			wake_up_process(speedchange_task);
